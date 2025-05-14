@@ -1,169 +1,209 @@
-import tkinter as tk
-from tkinter import simpledialog, messagebox
-import json
-import os
+import logging
+from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ConversationHandler, ContextTypes
+import openpyxl
+import datetime
 
-# Файл для хранения аккаунтов
-ACCOUNTS_FILE = 'accounts.json'
+# Введите ваш токен бота сюда
+TOKEN = '7400358552:AAHV7_6vC_OnUEikSZ_xQrXZhMVwEEy9YG4'
 
+# Этапы диалога
+CHOOSING_ACTION, ADD_RECIPE_NAME, ADD_RECIPE_INGREDIENTS, ADD_RECIPE_INSTRUCTION, FIND_RECIPE_INGREDIENTS = range(5)
 
-# Загружаем аккаунты из файла
-def load_accounts():
-    if os.path.exists(ACCOUNTS_FILE):
-        with open(ACCOUNTS_FILE, 'r') as file:
-            return json.load(file)
-    return {}
+# Имя файла Excel
+EXCEL_FILE = 'recipes.xlsx'
 
+# Настройка логирования
+logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 
-# Сохраняем аккаунты в файл
-def save_accounts(accounts):
-    with open(ACCOUNTS_FILE, 'w') as file:
-        json.dump(accounts, file)
+# Максимальное число рецептов в день на пользователя (по умолчанию)
+DEFAULT_MAX_RECIPES_PER_DAY = 1
 
+# Временное хранилище счетчиков по пользователям (user_id + date)
+user_recipe_counts = {}
 
-# Главный класс приложения
-class App:
-    def __init__(self, root):
-        self.root = root
-        self.root.title("Language Learning App")
+# Список VIP пользователей по ID
+VIP_USERS = {6382538882}  # Замените на ваш Telegram user_id или добавьте свои
 
-        # Храним аккаунты
-        self.accounts = load_accounts()
-        self.current_user = None
+def init_excel():
+    try:
+        wb = openpyxl.load_workbook(EXCEL_FILE)
+        sheet = wb.active
+    except FileNotFoundError:
+        wb = openpyxl.Workbook()
+        sheet = wb.active
+        sheet.append(['Название', 'Ингредиенты', 'Инструкция'])
+        wb.save(EXCEL_FILE)
 
-        # Первоначальные элементы интерфейса
-        self.start_screen()
+def save_recipe(name, ingredients, instruction):
+    wb = openpyxl.load_workbook(EXCEL_FILE)
+    sheet = wb.active
+    sheet.append([name, ingredients, instruction])
+    wb.save(EXCEL_FILE)
 
-    def start_screen(self):
-        self.clear_screen()
+def get_main_keyboard():
+    reply_keyboard = [['Добавить рецепт', 'Найти рецепт'], ['Отмена']]
+    return ReplyKeyboardMarkup(reply_keyboard, one_time_keyboard=False, resize_keyboard=True)
 
-        self.title_label = tk.Label(self.root, text="Добро пожаловать!", font=("Arial black", 18))
-        self.title_label.pack(pady=400)
+def get_cancel_keyboard():
+    reply_keyboard = [['Отмена']]
+    return ReplyKeyboardMarkup(reply_keyboard, one_time_keyboard=True, resize_keyboard=True)
 
-        self.register_button = tk.Button(self.root, text="Зарегистрироваться", command=self.register, width=20,
-                                         bg='lightblue', borderwidth=22, relief='raised')
-        self.register_button.pack(pady=8)
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    reply_markup = get_main_keyboard()
+    await update.message.reply_text('Выберите действие:', reply_markup=reply_markup)
+    return CHOOSING_ACTION
 
-        self.login_button = tk.Button(self.root, text="Войти", command=self.login, width=20, bg='lightgreen',
-                                      borderwidth=22, relief='raised')
-        self.login_button.pack(pady=5)
+async def handle_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text.strip()
+    if text == 'Добавить рецепт':
+        await update.message.reply_text('Введите название рецепта:', reply_markup=get_cancel_keyboard())
+        return ADD_RECIPE_NAME
+    elif text == 'Найти рецепт':
+        await update.message.reply_text('Введите продукты у вас есть через запятую:', reply_markup=get_cancel_keyboard())
+        return FIND_RECIPE_INGREDIENTS
+    elif text == 'Отмена':
+        await update.message.reply_text('Действие отменено.', reply_markup=ReplyKeyboardRemove())
+        return await start(update, context)
+    else:
+        await update.message.reply_text('Пожалуйста выберите действие из меню.', reply_markup=get_main_keyboard())
+        return CHOOSING_ACTION
 
-    def clear_screen(self):
-        for widget in self.root.winfo_children():
-            widget.destroy()
+async def add_recipe_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.message.text == 'Отмена':
+        await update.message.reply_text('Добавление рецепта отменено.', reply_markup=ReplyKeyboardRemove())
+        return await start(update, context)
+    context.user_data['recipe_name'] = update.message.text.strip()
+    await update.message.reply_text('Введите ингредиенты через запятую:', reply_markup=get_cancel_keyboard())
+    return ADD_RECIPE_INGREDIENTS
 
-    def register(self):
-        username = simpledialog.askstring("Регистрация", "Введите имя пользователя:")
-        password = simpledialog.askstring("Регистрация", "Введите пароль:", show='*')
+async def add_recipe_ingredients(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.message.text == 'Отмена':
+        await update.message.reply_text('Добавление рецепта отменено.', reply_markup=ReplyKeyboardRemove())
+        return await start(update, context)
+    ingredients = update.message.text.strip()
+    context.user_data['ingredients'] = ingredients
+    await update.message.reply_text('Введите инструкцию по приготовлению:', reply_markup=get_cancel_keyboard())
+    return ADD_RECIPE_INSTRUCTION
 
-        if username and password:
-            self.accounts[username] = password
-            save_accounts(self.accounts)
-            messagebox.showinfo("Успех", "Вы успешно зарегистрировались!")
-        else:
-            messagebox.showwarning("Предупреждение", "Имя пользователя и пароль не могут быть пустыми.")
+async def add_recipe_instruction(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.message.text == 'Отмена':
+        await update.message.reply_text('Добавление рецепта отменено.', reply_markup=ReplyKeyboardRemove())
+        return await start(update, context)
 
-    def login(self):
-        username = simpledialog.askstring("Вход", "Введите имя пользователя:")
-        password = simpledialog.askstring("Вход", "Введите пароль:", show='*')
+    user_id = update.effective_user.id
+    today_str = datetime.date.today().isoformat()
+    user_day_key = f"{user_id}_{today_str}"
 
-        if username in self.accounts and self.accounts[username] == password:
-            self.current_user = username
-            messagebox.showinfo("Успех", "Вы вошли в свою учетную запись!")
-            self.main_menu()
-        else:
-            messagebox.showwarning("Ошибка", "Неправильное имя пользователя или пароль.")
+    # Проверка VIP статус
+    is_vip = user_id in VIP_USERS
 
-    def main_menu(self):
-        self.clear_screen()
+    # Получение лимита для пользователя (если не VIP)
+    max_recipes_per_day = DEFAULT_MAX_RECIPES_PER_DAY if not is_vip else float('inf')
 
-        self.menu_label = tk.Label(self.root, text="Главное меню", font=("Arial black", 18))
-        self.menu_label.pack(pady=400)
+    count_today = user_recipe_counts.get(user_day_key, 0)
 
-        self.lesson_button = tk.Button(self.root, text="Начать новый урок", command=self.select_level, width=20,
-                                       bg='lightblue', borderwidth=11, relief='raised')
-        self.lesson_button.pack(pady=8)
+    if not is_vip and count_today >= max_recipes_per_day:
+        await update.message.reply_text(
+            f"Вы достигли лимита {max_recipes_per_day} рецептов за сегодня.",
+            reply_markup=ReplyKeyboardRemove()
+        )
+        return await start(update, context)
 
-        self.settings_button = tk.Button(self.root, text="Настройки", command=self.settings, width=20, bg='lightgreen',
-                                         borderwidth=11, relief='raised')
-        self.settings_button.pack(pady=5)
+    name = context.user_data['recipe_name']
+    ingredients = context.user_data['ingredients']
+    instruction = update.message.text.strip()
 
-    def settings(self):
-        self.clear_screen()
+    save_recipe(name, ingredients, instruction)
 
-        self.settings_label = tk.Label(self.root, text="Настройки", font=("Arial black", 24))
-        self.settings_label.pack(pady=400)
+    user_recipe_counts[user_day_key] = count_today + 1
 
-        self.font_size_button = tk.Button(self.root, text="Изменить размер шрифта", command=self.set_font_size,
-                                          width=26, bg='lightblue', borderwidth=20, relief='raised')
-        self.font_size_button.pack(pady=5)
+    await update.message.reply_text('Рецепт сохранен!', reply_markup=ReplyKeyboardRemove())
 
-        self.color_settings_button = tk.Button(self.root, text="Изменить цвет интерфейса", command=self.set_color,
-                                               width=26, bg='lightgreen', borderwidth=20, relief='raised')
-        self.color_settings_button.pack(pady=5)
+    return await start(update, context)
 
-        self.button_color_button = tk.Button(self.root, text="Изменить цвет кнопок", command=self.set_button_color,
-                                             width=26, bg='lightyellow', borderwidth=20, relief='raised')
-        self.button_color_button.pack(pady=20)
+async def find_recipes(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.message.text == 'Отмена':
+        await update.message.reply_text('Поиск рецептов отменен.', reply_markup=ReplyKeyboardRemove())
+        return await start(update, context)
 
-        self.back_button = tk.Button(self.root, text="Назад", command=self.main_menu, width=20, bg='lightcoral',
-                                     borderwidth=16, relief='raised')
-        self.back_button.pack(pady=5)
+    user_ingredients = [ing.strip().lower() for ing in update.message.text.split(',')]
 
-    def set_font_size(self):
-        size = simpledialog.askinteger("Размер шрифта", "Введите размер шрифта:")
-        if size:
-            self.root.option_add("*Font", f"Arial {size}")
-            messagebox.showinfo("Успех", "Размер шрифта изменен!")
+    wb = openpyxl.load_workbook(EXCEL_FILE)
+    sheet = wb.active
 
-    def set_color(self):
-        color = simpledialog.askstring("Цвет интерфейса", "Введите цвет (например, 'red', '#FF5733'):")
-        if color:
-            self.root.configure(bg=color)
-            messagebox.showinfo("Успех", "Цвет интерфейса изменен!")
+    matching_recipes = []
 
-    def set_button_color(self):
-        color = simpledialog.askstring("Цвет кнопок", "Введите цвет кнопок (например, 'blue', '#5733FF'):")
-        if color:
-            for button in self.root.winfo_children():
-                if isinstance(button, tk.Button):
-                    button.configure(bg=color)
-            messagebox.showinfo("Успех", "Цвет кнопок изменен!")
+    for row in sheet.iter_rows(min_row=2, values_only=True):
+        recipe_name, ingredients_str, instruction = row
+        recipe_ings = [ing.strip().lower() for ing in ingredients_str.split(',')]
 
-    def select_level(self):
-        self.clear_screen()
+        # Проверка если все введенные пользователем ингредиенты есть в рецепте
+        if all(ing in recipe_ings for ing in user_ingredients):
+            matching_recipes.append((recipe_name, ingredients_str, instruction))
 
-        self.level_label = tk.Label(self.root, text="ваш уровень английского", font=("Arial black", 15))
-        self.level_label.pack(pady=400)
+    if matching_recipes:
+        response = 'Найденные рецепты:\n'
+        for name, ings, instr in matching_recipes:
+            response += f"\n*{name}*\nИнгредиенты: {ings}\nИнструкция: {instr}\n"
+        await update.message.reply_text(response)
+    else:
+        await update.message.reply_text('Рецепты не найдены.')
 
+   # После поиска возвращаемся к старту или завершаем диалог
+    return await start(update, context)
 
-        self.beginner_button = tk.Button(self.root, text="Только начинаю",
-                                         command=lambda: self.start_lesson("Только начинаю"), width=26, bg='lightblue',
-                                         borderwidth=20, relief='raised')
-        self.beginner_button.pack(pady=5)
+# Команда для изменения лимита (только для админа или вас)
+async def set_limit(update: Update, context: ContextTypes.DEFAULT_TYPE):
+   user_id = update.effective_user.id
 
-        self.intermediate_button = tk.Button(self.root, text=" составляю простые предложения",
-                                             command=lambda: self.start_lesson("Могу составлять простые предложения"),
-                                             width=26, bg='lightgreen', borderwidth=20, relief='raised')
-        self.intermediate_button.pack(pady=5)
+   # Проверьте права доступа (например только вы или определённый пользователь)
+   # Для простоты разрешим только вам (замените на свой ID или список админов)
+   ADMIN_IDs = {6382538882}  # замените на ваш ID или список ID админов
 
-        self.advanced_button = tk.Button(self.root, text="Могу быть переводчиком",
-                                         command=lambda: self.start_lesson("Могу быть переводчиком"), width=26,
-                                         bg='lightyellow', borderwidth=20, relief='raised')
-        self.advanced_button.pack(pady=20)
+   if user_id not in ADMIN_IDs:
+       await update.message.reply_text("У вас нет прав для выполнения этой команды.")
+       return
 
-        self.back_button = tk.Button(self.root, text="Назад", command=self.main_menu, width=20, bg='lightcoral',
-                                     borderwidth=16, relief='raised')
-        self.back_button.pack(pady=5)
+   # Проверка аргумента лимита
+   if len(context.args) != 1 or not context.args[0].isdigit():
+       await update.message.reply_text("Использование: /set_limit <число>")
+       return
 
-    def start_lesson(self, level):
-        messagebox.showinfo("Урок", f"Вы выбрали уровень: {level}")
-        self.main_menu()
+   new_limit = int(context.args[0])
+   global DEFAULT_MAX_RECIPES_PER_DAY
+   DEFAULT_MAX_RECIPES_PER_DAY = new_limit
 
+   await update.message.reply_text(f"Лимит рецептов в день установлен на {new_limit}.")
 
-# Создание приложения
-if __name__ == "__main__":
-    root = tk.Tk()
-    app = App(root)
-    root.geometry("720x1280")
-    root.mainloop()
+def main():
+   init_excel()
+
+   application = ApplicationBuilder().token(TOKEN).build()
+
+   conv_handler = ConversationHandler(
+       entry_points=[CommandHandler('start', start)],
+       states={
+           CHOOSING_ACTION: [MessageHandler(filters.TEXT & ~filters.COMMAND,
+                                            handle_action)],
+           ADD_RECIPE_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND | filters.Regex('^Отмена$'),
+                                              add_recipe_name)],
+           ADD_RECIPE_INGREDIENTS: [MessageHandler(filters.TEXT & ~filters.COMMAND | filters.Regex('^Отмена$'),
+                                                    add_recipe_ingredients)],
+           ADD_RECIPE_INSTRUCTION: [MessageHandler(filters.TEXT & ~filters.COMMAND | filters.Regex('^Отмена$'),
+                                                    add_recipe_instruction)],
+           FIND_RECIPE_INGREDIENTS: [MessageHandler(filters.TEXT & ~filters.COMMAND | filters.Regex('^Отмена$'),
+                                                      find_recipes)],
+       },
+       fallbacks=[]
+   )
+
+   application.add_handler(conv_handler)
+
+   # Добавляем команду /set_limit для изменения лимита
+   application.add_handler(CommandHandler('set_limit', set_limit))
+
+   application.run_polling()
+
+if __name__ == '__main__':
+   main()
