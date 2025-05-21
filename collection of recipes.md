@@ -6,7 +6,7 @@ import datetime
 import re
 
 # Введите ваш токен бота сюда
-TOKEN = '7400358552:AAHV7_6vC_OnUEikSZ_xQrXZhMVwEEy9YG4'
+TOKEN = 'token'
 
 # Этапы диалога
 CHOOSING_ACTION, ADD_RECIPE_NAME, ADD_RECIPE_INGREDIENTS, ADD_RECIPE_INSTRUCTION, FIND_RECIPE_INGREDIENTS = range(5)
@@ -26,7 +26,7 @@ DEFAULT_MAX_RECIPES_PER_DAY = 1
 user_recipe_counts = {}
 
 # Список VIP пользователей по ID
-VIP_USERS = {6382538882}  # Замените на ваш Telegram user_id или добавьте свои
+VIP_USERS = {tg id}  # Замените на ваш Telegram user_id или добавьте свои
 
 
 def init_excel():
@@ -230,7 +230,7 @@ async def set_limit(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
    # Проверьте права доступа (например только вы или определённый пользователь)
    # Для простоты разрешим только вам (замените на свой ID или список админов)
-   ADMIN_IDs = {6382538882}  # замените на ваш ID или список ID админов
+   ADMIN_IDs = {tg id}  # замените на ваш ID или список ID админов
 
    if user_id not in ADMIN_IDs:
        await update.message.reply_text("У вас нет прав для выполнения этой команды.")
